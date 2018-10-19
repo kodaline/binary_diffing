@@ -6,6 +6,7 @@ from llvmcpy.llvm import *
 import math
 import matplotlib.pylab as plt
 import helper
+from pathos.multiprocessing import ProcessingPool as Pool
 
 def show_graphic(args):
     for filename in args:
@@ -97,25 +98,48 @@ def flatten(container):
 
 def compute_csv(args):
     
+    try:
+        cpus = 4 #multiprocessing.cpu_count() - 1
+    except NotImplementedError:
+        cpus = 2   # arbitrary default
+    
     buffer_1 = create_memory_buffer_with_contents_of_file(args[0])
     buffer_2 = create_memory_buffer_with_contents_of_file(args[1])
     context = get_global_context()
     module_1 = context.parse_ir(buffer_1)
     module_2 = context.parse_ir(buffer_2)
+    global list_opcodes
     list_opcodes = get_opcodes([module_1, module_2])
-    
+    global helper_names
     helper_names = get_helper_names(module_1, module_2)
     
-    header = list(flatten(['function1', 'function2', 'match', '#bb_sum', '#bb_diff', '#instr_sum', '#instr_diff', 'byte_dim_sum', 'byte_dim_diff', '#instructions_sum', '#instructions_diff', 'load_dim_sum', 'load_dim_diff', '#loads_sum', '#loads_diff', 'store_dim_sum', 'store_dim_diff', '#lstores_sum', '#stores_diff', '#indirect_calls_sum', '#indirect_calls_diff', '#revamb_function_calls_sum', '#revamb_function_calls_diff', '#function_calls_sum', '#function_calls_diff']))
-    header.extend(list(flatten([[str(elem) + "_sum", str(elem) + "_diff"] for elem in helper_names])))
+    header = list(flatten(['function1', 'function2', 'match', '#bb_ratio', '#bb_diff', '#instr_ratio', '#instr_diff', 'byte_dim_ratio', 'byte_dim_diff', '#instructions_ratio', '#instructions_diff', 'load_dim_ratio', 'load_dim_diff', '#loads_ratio', '#loads_diff', 'store_dim_ratio', 'store_dim_diff', '#lstores_ratio', '#stores_diff', '#indirect_calls_ratio', '#indirect_calls_diff', '#revamb_function_calls_ratio', '#revamb_function_calls_diff', '#function_calls_ratio', '#function_calls_diff']))
+    header.extend(list(flatten([[str(elem) + "_ratio", str(elem) + "_diff"] for elem in helper_names])))
     
-    header.extend(list(flatten([[str(elem) + "_sum", str(elem) + "_diff"] for elem in list_opcodes])))
-    
-    rows = [list(flatten([fun1.name, fun2.name, compare_name(fun1, fun2), cmp_dimension_llvm_bb(fun1, fun2), cmp_dimension_llvm_instr(fun1, fun2), cmp_byte_dimension_num_instr(fun1, fun2), cmp_load_instructions(fun1, fun2), cmp_store_instructions(fun1, fun2), cmp_indirect_calls(fun1, fun2), cmp_revamb_function_calls(fun1, fun2), cmp_num_function_calls(fun1, fun2), cmp_helper_calls(fun1, fun2,helper_names), cmp_instruction_opcodes(fun1, fun2, list_opcodes)])) for fun1 in module_1.iter_functions() for fun2 in module_2.iter_functions() if "bb." in fun1.name and "bb." in fun2.name]
-    
-    helper.write(rows, header)            
+    header.extend(list(flatten([[str(elem) + "_ratio", str(elem) + "_diff"] for elem in list_opcodes])))
 
-def compare_name(fun1, fun2):
+    #pool = Pool(cpus) 
+    
+    functions_list = [get_names, cmp_name, cmp_dimension_llvm_bb, cmp_dimension_llvm_instr, cmp_byte_dimension_num_instr, cmp_load_store_instructions, cmp_indirect_calls, cmp_revamb_function_calls, cmp_num_function_calls, cmp_helper_calls, cmp_instruction_opcodes]
+    
+    global module1_dict
+    global module2_dict
+    
+    module1_dict = {fun1.name: [instruction.print_value_to_string() for bb in fun1.iter_basic_blocks() for instruction in bb.iter_instructions()] for fun1 in module_1.iter_functions()}
+
+    module2_dict = {fun2.name: [instruction.print_value_to_string() for bb in fun2.iter_basic_blocks() for instruction in bb.iter_instructions()] for fun2 in module_2.iter_functions()}
+        
+     
+    rows = [list(flatten(map(lambda x: x(fun1, fun2), functions_list))) for fun1 in module_1.iter_functions() for fun2 in module_2.iter_functions() if "bb." in fun1.name and "bb." in fun2.name]
+    '''
+    rows = [list(flatten([get_names(fun1, fun2), compare_name(fun1, fun2), cmp_dimension_llvm_bb(fun1, fun2), cmp_dimension_llvm_instr(fun1, fun2), cmp_byte_dimension_num_instr(fun1, fun2), cmp_load_instructions(fun1, fun2), cmp_store_instructions(fun1, fun2), cmp_indirect_calls(fun1, fun2), cmp_revamb_function_calls(fun1, fun2), cmp_num_function_calls(fun1, fun2), cmp_helper_calls(fun1, fun2), cmp_instruction_opcodes(fun1, fun2)])) for fun1 in module_1.iter_functions() for fun2 in module_2.iter_functions() if "bb." in fun1.name and "bb." in fun2.name]
+    '''
+    helper.write(rows, header)
+
+def get_names(fun1, fun2):
+    return [fun1.name, fun2.name]
+
+def cmp_name(fun1, fun2):
     '''
     Compare fun1 name with fun2 name
     '''
@@ -127,7 +151,7 @@ def cmp_dimension_llvm_bb(fun1, fun2):
     '''
     bb1 = fun1.count_basic_blocks()
     bb2 = fun2.count_basic_blocks()
-    return [bb1 + bb2, math.fabs(bb1-bb2)]
+    return [(bb1 + bb2)/2, bb1-bb2]
     
 def cmp_dimension_llvm_instr(fun1, fun2):
     count1 = 0
@@ -139,7 +163,7 @@ def cmp_dimension_llvm_instr(fun1, fun2):
         for instruction in bb.iter_instructions():
             count2 += 1
 
-    return [count1 + count2, math.fabs(count1 - count2)]
+    return [(count1 + count2)/2, count1 - count2]
 
 def get_opcodes(array_module):
     opcode_set = set()
@@ -158,12 +182,12 @@ def get_opcode_dictionary(function):
             opcode_dictionary[instruction.instruction_opcode] += 1
     return opcode_dictionary
 
-def cmp_instruction_opcodes(fun1, fun2, opcode_list):
+def cmp_instruction_opcodes(fun1, fun2):
 
     fun1_opcode_dictionary = get_opcode_dictionary(fun1)
     fun2_opcode_dictionary = get_opcode_dictionary(fun2)
 
-    return [[fun1_opcode_dictionary[elem] + fun2_opcode_dictionary[elem], fun1_opcode_dictionary[elem] - fun2_opcode_dictionary[elem]] for elem in opcode_list]
+    return [[(fun1_opcode_dictionary[elem] + fun2_opcode_dictionary[elem])/2, fun1_opcode_dictionary[elem] - fun2_opcode_dictionary[elem]] for elem in list_opcodes]
 
 
 def get_byte_dimension(function):
@@ -179,37 +203,29 @@ def get_byte_dimension(function):
 def cmp_byte_dimension_num_instr(fun1, fun2):
     fun1_dim, fun1_num_instr = get_byte_dimension(fun1)
     fun2_dim, fun2_num_instr = get_byte_dimension(fun2)
-    return [fun1_dim + fun2_dim, fun1_dim - fun2_dim, fun1_num_instr + fun2_num_instr, fun1_num_instr - fun2_num_instr]
+    return [(fun1_dim + fun2_dim)/2, fun1_dim - fun2_dim, (fun1_num_instr + fun2_num_instr)/2, fun1_num_instr - fun2_num_instr]
 
-def get_loads(function):
-    load_inst = []
+def get_loads_stores(function):
+    load_inst = 0
+    store_inst = 0
+    len_load_inst = 0
+    len_store_inst = 0
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
             if instruction.is_a_load_inst() != None and instruction.get_operand(0).is_a_global_variable() == None:
-                load_inst.append(instruction.type_of().get_int_type_width())
-    return sum(load_inst), len(load_inst)
-
-def cmp_load_instructions(fun1, fun2):
-    
-    fun1_loads_dim, fun1_loads_count = get_loads(fun1) 
-    fun2_loads_dim, fun2_loads_count = get_loads(fun2)
-    
-    return [fun1_loads_dim + fun2_loads_dim, fun1_loads_dim - fun2_loads_dim, fun1_loads_count + fun2_loads_count, fun1_loads_count - fun2_loads_count]
-   
-def get_stores(function):
-    store_inst = []
-    for bb in function.iter_basic_blocks():
-        for instruction in bb.iter_instructions():
+                load_inst += instruction.type_of().get_int_type_width()
+                len_load_inst += 1 
             if instruction.is_a_store_inst() != None and instruction.get_operand(1).is_a_global_variable() == None:
-                store_inst.append(instruction.get_operand(0).type_of().get_int_type_width())
-    return sum(store_inst), len(store_inst)
+                store_inst += instruction.type_of().get_int_type_width()
+                len_store_inst += 1
+    return load_inst / 8.0, len_load_inst, store_inst / 8.0, len_store_inst
 
-def cmp_store_instructions(fun1, fun2):
-
-    fun1_store_dim, fun1_store_count = get_stores(fun1) 
-    fun2_store_dim, fun2_store_count = get_stores(fun2) 
+def cmp_load_store_instructions(fun1, fun2):
     
-    return [fun1_store_dim + fun2_store_dim, fun1_store_dim - fun2_store_dim, fun1_store_count + fun2_store_count, fun1_store_count - fun2_store_count]
+    fun1_loads_dim, fun1_loads_count, fun1_store_dim, fun1_store_count = get_loads_stores(fun1) 
+    fun2_loads_dim, fun2_loads_count, fun2_store_dim, fun2_store_count = get_loads_stores(fun2)
+    
+    return [(fun1_loads_dim + fun2_loads_dim)/2, fun1_loads_dim - fun2_loads_dim, (fun1_loads_count + fun2_loads_count)/2, fun1_loads_count - fun2_loads_count, (fun1_store_dim + fun2_store_dim)/2, fun1_store_dim - fun2_store_dim, (fun1_store_count + fun2_store_count)/2, fun1_store_count - fun2_store_count]
 
 def get_helper_names(module1, module2):
     helper_names = []
@@ -248,15 +264,15 @@ def cmp_revamb_function_calls(fun1, fun2):
     fun1_revamb_calls = get_revamb_function_calls(fun1)
     fun2_revamb_calls = get_revamb_function_calls(fun2)
 
-    return [fun1_revamb_calls + fun2_revamb_calls, fun1_revamb_calls - fun2_revamb_calls]
+    return [(fun1_revamb_calls + fun2_revamb_calls)/2, fun1_revamb_calls - fun2_revamb_calls]
 
 
-def cmp_helper_calls(fun1, fun2, helper_set): 
+def cmp_helper_calls(fun1, fun2): 
                
-    fun1_helper_calls = get_helper_calls(fun1, helper_set)
-    fun2_helper_calls = get_helper_calls(fun2, helper_set)
+    fun1_helper_calls = get_helper_calls(fun1, helper_names)
+    fun2_helper_calls = get_helper_calls(fun2, helper_names)
     
-    return [[fun1_helper_calls[elem] + fun2_helper_calls[elem], fun1_helper_calls[elem] - fun2_helper_calls[elem]] for elem in helper_set]
+    return [[(fun1_helper_calls[elem] + fun2_helper_calls[elem])/2, fun1_helper_calls[elem] - fun2_helper_calls[elem]] for elem in helper_names]
 
 def get_indirect_calls(function):
     
@@ -272,7 +288,7 @@ def cmp_indirect_calls(fun1, fun2):
     fun1_indirect_calls = get_indirect_calls(fun1)
     fun2_indirect_calls = get_indirect_calls(fun2)
 
-    return [fun1_indirect_calls + fun2_indirect_calls, fun1_indirect_calls - fun2_indirect_calls]
+    return [(fun1_indirect_calls + fun2_indirect_calls)/2, fun1_indirect_calls - fun2_indirect_calls]
 
 def get_num_function_calls(function):
     count = 0
@@ -287,7 +303,7 @@ def cmp_num_function_calls(fun1, fun2):
     fun1_function_calls = get_num_function_calls(fun1)
     fun2_function_calls = get_num_function_calls(fun2)
 
-    return [fun1_function_calls + fun2_function_calls, fun1_function_calls - fun2_function_calls]
+    return [(fun1_function_calls + fun2_function_calls)/2, fun1_function_calls - fun2_function_calls]
 
 
 
