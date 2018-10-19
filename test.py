@@ -113,23 +113,16 @@ def compute_csv(args):
     global helper_names
     helper_names = get_helper_names(module_1, module_2)
     
-    header = list(flatten(['function1', 'function2', 'match', '#bb_ratio', '#bb_diff', '#instr_ratio', '#instr_diff', 'byte_dim_ratio', 'byte_dim_diff', '#instructions_ratio', '#instructions_diff', 'load_dim_ratio', 'load_dim_diff', '#loads_ratio', '#loads_diff', 'store_dim_ratio', 'store_dim_diff', '#lstores_ratio', '#stores_diff', '#indirect_calls_ratio', '#indirect_calls_diff', '#revamb_function_calls_ratio', '#revamb_function_calls_diff', '#function_calls_ratio', '#function_calls_diff']))
+    header = list(flatten(['function1', 'function2', 'match', '#bb_ratio', '#bb_diff', '#instr_ratio', '#instr_diff', 'byte_dim_ratio', 'byte_dim_diff', '#instructions_ratio', '#instructions_diff', 'load_dim_ratio', 'load_dim_diff', '#loads_ratio', '#loads_diff', 'store_dim_ratio', 'store_dim_diff', '#lstores_ratio', '#stores_diff', '#indirect_calls_ratio', '#indirect_calls_diff', '#function_calls_ratio', '#function_calls_diff']))
     header.extend(list(flatten([[str(elem) + "_ratio", str(elem) + "_diff"] for elem in helper_names])))
     
     header.extend(list(flatten([[str(elem) + "_ratio", str(elem) + "_diff"] for elem in list_opcodes])))
 
     #pool = Pool(cpus) 
     
-    functions_list = [get_names, cmp_name, cmp_dimension_llvm_bb, cmp_dimension_llvm_instr, cmp_byte_dimension_num_instr, cmp_load_store_instructions, cmp_indirect_calls, cmp_revamb_function_calls, cmp_num_function_calls, cmp_helper_calls, cmp_instruction_opcodes]
+    functions_list = [get_names, cmp_name, cmp_dimension_llvm_bb, cmp_dimension_llvm_instr, cmp_byte_dimension_num_instr, cmp_load_store_instructions, cmp_indirect_calls, cmp_revamb_function_calls, cmp_helper_calls, cmp_instruction_opcodes]
     
-    global module1_dict
-    global module2_dict
-    
-    module1_dict = {fun1.name: [instruction.print_value_to_string() for bb in fun1.iter_basic_blocks() for instruction in bb.iter_instructions()] for fun1 in module_1.iter_functions()}
 
-    module2_dict = {fun2.name: [instruction.print_value_to_string() for bb in fun2.iter_basic_blocks() for instruction in bb.iter_instructions()] for fun2 in module_2.iter_functions()}
-        
-     
     rows = [list(flatten(map(lambda x: x(fun1, fun2), functions_list))) for fun1 in module_1.iter_functions() for fun2 in module_2.iter_functions() if "bb." in fun1.name and "bb." in fun2.name]
     '''
     rows = [list(flatten([get_names(fun1, fun2), compare_name(fun1, fun2), cmp_dimension_llvm_bb(fun1, fun2), cmp_dimension_llvm_instr(fun1, fun2), cmp_byte_dimension_num_instr(fun1, fun2), cmp_load_instructions(fun1, fun2), cmp_store_instructions(fun1, fun2), cmp_indirect_calls(fun1, fun2), cmp_revamb_function_calls(fun1, fun2), cmp_num_function_calls(fun1, fun2), cmp_helper_calls(fun1, fun2), cmp_instruction_opcodes(fun1, fun2)])) for fun1 in module_1.iter_functions() for fun2 in module_2.iter_functions() if "bb." in fun1.name and "bb." in fun2.name]
@@ -195,9 +188,11 @@ def get_byte_dimension(function):
     num_instructions = 0
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
-            if "newpc" in instruction.print_value_to_string():
-                sum_dimension += helper.get_value_from_operand(instruction.get_operand(1))
-                num_instructions += 1
+            if instruction.is_a_call_inst() != None:
+                if instruction.get_num_operands() >= 4:
+                    if instruction.get_operand(instruction.get_num_operands() - 1).get_name() == "newpc":
+                        sum_dimension += helper.get_value_from_operand(instruction.get_operand(1))
+                        num_instructions += 1
     return sum_dimension, num_instructions
 
 def cmp_byte_dimension_num_instr(fun1, fun2):
@@ -243,9 +238,10 @@ def get_helper_calls(function, helper_set):
 
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
-            for elem in helper_set:
-                if elem in instruction.print_value_to_string():
-                    helper_calls[elem] += 1
+            if instruction.is_a_call_inst() != None:
+                for elem in helper_set:
+                    if elem == instruction.get_operand(instruction.get_num_operands() - 1).get_name():
+                        helper_calls[elem] += 1
     return helper_calls
 
 def get_revamb_function_calls(function):
@@ -253,8 +249,9 @@ def get_revamb_function_calls(function):
     revamb_calls = []
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
-            if "bb." in instruction.print_value_to_string() and instruction.is_a_call_inst() != None:
-                revamb_calls.append(instruction)
+            if instruction.is_a_call_inst() != None:
+                if "bb." in  instruction.get_operand(instruction.get_num_operands()-1).get_name():
+                    revamb_calls.append(instruction)
 
     return len(revamb_calls)
 
@@ -276,12 +273,13 @@ def cmp_helper_calls(fun1, fun2):
 
 def get_indirect_calls(function):
     
-    dispatcher_calls = []
+    dispatcher_calls = 0
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
-            if "function_dispatcher" in instruction.print_value_to_string():
-                dispatcher_calls.append(instruction)
-    return len(dispatcher_calls)
+            if instruction.is_a_call_inst() != None:
+                if instruction.get_operand(instruction.get_num_operands()-1).get_name() == "function_dispatcher":
+                    dispatcher_calls += 1
+    return dispatcher_calls
 
 def cmp_indirect_calls(fun1, fun2):
     
@@ -294,8 +292,9 @@ def get_num_function_calls(function):
     count = 0
     for bb in function.iter_basic_blocks():
         for instruction in bb.iter_instructions():
-            if "function_call" in instruction.print_value_to_string() and instruction.is_a_call_inst() != None:
-                count += 1    
+            if instruction.is_a_call_inst() != None:
+                if "function_call" in instruction.print_value_to_string():
+                    count += 1    
     return count 
 
 def cmp_num_function_calls(fun1, fun2):
