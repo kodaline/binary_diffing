@@ -1,2 +1,2 @@
-# binary_diffing
+# binarydiff
 project for rev.ng
