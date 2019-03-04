@@ -25,3 +25,20 @@ def get_value_from_operand(operand):
     """
     return int(operand.print_value_to_string().split(' ')[1])
 
+def flatten(container):
+    """Flat elements of a list.
+
+    This function is used to flat arbitrarily nested lists into a single list.
+    
+    @type container: list
+    @param container: The list to flatten.
+
+    @rtype: list
+    @return: Returns the flattened list.
+    """
+    for i in container:
+        if isinstance(i, (list,tuple)):
+            for j in flatten(i):
+                yield j
+        else:
+            yield i
